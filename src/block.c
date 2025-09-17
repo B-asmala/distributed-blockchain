@@ -1,0 +1,82 @@
+#include "block.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <openssl/sha.h>
+#include <time.h>
+
+
+void hash_data(const uint8_t * data, size_t len, hash_t hashed_data){
+    SHA256((const unsigned char*) data, len, hashed_data);
+}
+
+
+void hash_string(const char * str, hash_t hashed_str){
+    hash_data((const unsigned char*)str, strlen(str), hashed_str);
+}
+
+
+void print_hash(hash_t hash) {
+    for (int i = 0; i < HASH_SIZE; i++) {
+        printf("%02x", hash[i]);
+    }
+    printf("\n");
+}
+
+void hash_transaction(Transaction * tx){
+    //TODO: handle endianess
+    //4 uint32, 4 * 4 = 16 byte
+    uint8_t serialized_data[16];
+    memcpy(serialized_data, &tx->sender_ID, sizeof(uint32_t));
+    memcpy(serialized_data + 4, &tx->receiver_ID, sizeof(uint32_t));
+    memcpy(serialized_data + 8, &tx->amount, sizeof(uint32_t));
+    memcpy(serialized_data + 12, &tx->timestamp, sizeof(uint32_t));
+    hash_data(serialized_data, 16, tx->txid); 
+    
+    
+
+}
+
+void hash_pair(const hash_t first, const hash_t second, hash_t result){
+    unsigned char combined_hashes[2 * HASH_SIZE];
+
+    memcpy(combined_hashes, first, HASH_SIZE); //first half
+    memcpy(combined_hashes + HASH_SIZE, second, HASH_SIZE); //second half
+    hash_data(combined_hashes, 2 * HASH_SIZE, result);
+}
+
+void calculate_merkle_root(Block * block){
+    hash_t hashes[BLOCK_SIZE];
+    int length = BLOCK_SIZE;
+    int new_length;
+
+    for(int i = 0; i < BLOCK_SIZE; i ++){
+        memcpy(hashes[i], block->transactions[i].txid, 32);
+    }
+
+    while(length > 1){
+        new_length = (length + 1) / 2;
+
+        for(int i = 0; i < new_length; i ++){
+            if(i * 2 + 1 < length){ // pair of hashes available
+                hash_pair(hashes[2 * i], hashes[2 * i + 1], hashes[i]);
+            }else{ // not enough hashes
+                hash_pair(hashes[2 * i], hashes[2 * i], hashes[i]);
+            }
+
+        }
+
+        length = new_length;
+    }
+
+    memcpy(block->header.merkle_root, hashes[0], HASH_SIZE);
+
+
+
+}
+
+
+
+
+

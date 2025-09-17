@@ -1,0 +1,10 @@
+# Build artifacts
+/build/
+/bin/
+/obj/
+*.o
+*.a
+*.so
+*.exe
+
+
