@@ -4,6 +4,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <openssl/sha.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/err.h>
+#include <openssl/sha.h>
+#include <openssl/bn.h>
 #include <time.h>
 
 
@@ -76,7 +81,33 @@ void calculate_merkle_root(Block * block){
 
 }
 
+//TODO: update to EVP API
+//general functions for signing/verifying
+void sign_data(const uint8_t * data, size_t len, uint8_t * sig, uint32_t * sig_len, RSA *rsa_priv) {
+    hash_t hash;
+    hash_data(data, len, hash);
 
+    RSA_sign(NID_sha256, hash, HASH_SIZE, sig, sig_len, rsa_priv);
 
+}
+
+int verify_data_signature(const uint8_t *data, size_t len, const uint8_t * sig, uint32_t sig_len, RSA * rsa_pub) {
+    hash_t hash;
+    SHA256(data, len, hash);
+
+    return RSA_verify(NID_sha256, hash, HASH_SIZE, sig, sig_len, rsa_pub);
+}
+
+//singing/verifying transactions
+void sign_transaction(Transaction * tx, RSA * rsa_priv) {
+    uint32_t dummy;
+    sign_data(tx->txid, HASH_SIZE, tx->signature, &dummy, rsa_priv);
+}
+
+int verify_transaction_signature(Transaction * tx, RSA * rsa_pub) {
+    
+    return verify_data_signature(tx->txid, HASH_SIZE, tx->signature, RSA_size(rsa_pub), rsa_pub);
+    
+}
 
 
