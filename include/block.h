@@ -11,6 +11,7 @@
 
 #define HASH_SIZE 32 
 #define BLOCK_SIZE 5
+#define TARGET 3
 
 typedef uint8_t hash_t[HASH_SIZE];
 
@@ -27,10 +28,11 @@ typedef struct{
 
 typedef struct {
     uint32_t index;
+    uint32_t nonce;
+    uint32_t timestamp; 
     hash_t previous_hash;
     hash_t merkle_root;
-    uint32_t nonce;
-    uint32_t timestamp;
+
 } BlockHeader;
 
 typedef struct{
@@ -51,5 +53,7 @@ void sign_data(const uint8_t * data, size_t len, uint8_t * sig, uint32_t * sig_l
 int verify_data_signature(const uint8_t *data, size_t len, const uint8_t * sig, uint32_t sig_len, RSA * rsa_pub);
 void sign_transaction(Transaction * tx, RSA * rsa_priv);
 int verify_transaction_signature(Transaction * tx, RSA * rsa_pub);
+void serialize_block_header(BlockHeader * blckhdr, uint8_t * buffer);
+int mine_block(Block * block);
 
 #endif
