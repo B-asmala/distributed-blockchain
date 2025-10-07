@@ -6,7 +6,7 @@
 #include <time.h>
 #include "block.h"
 #include "txpool.h"
-
+#include "hash_set.h"
 
 TransactionPool * init_transaction_pool(){
     TransactionPool * pool = malloc(sizeof(TransactionPool));
@@ -16,6 +16,7 @@ TransactionPool * init_transaction_pool(){
     pool->size = 0;
     pool->head = NULL;
     pool->tail = NULL;
+    pool->transaction_set = NULL;
     return pool;
 }
 
@@ -26,6 +27,10 @@ int enqueue_to_transaction_pool(TransactionPool* pool, Transaction* tx){
 
     if(pool->size >= TX_POOL_CAPACITY){
         return 1;
+    }
+
+    if(hash_set_contains(&(pool->transaction_set), tx->txid)){
+        return 1; //might need to change this
     }
 
     TransactionNode * txn = malloc(sizeof(TransactionNode));
@@ -42,6 +47,7 @@ int enqueue_to_transaction_pool(TransactionPool* pool, Transaction* tx){
 
     pool->tail = txn;
     pool->size ++;
+    hash_set_add(&(pool->transaction_set), tx->txid);
 
     return 0;
 }
@@ -67,6 +73,10 @@ int dequeue_from_transaction_pool(TransactionPool * pool, Transaction * tx){
 
     *tx = *(txn->current);
     free(txn);
+    
+    //might not need to immediately remove it from the hash table
+    //hash_set_remove(&(pool->transaction_set), tx->txid);
+
 
 
     return 0;
@@ -74,5 +84,5 @@ int dequeue_from_transaction_pool(TransactionPool * pool, Transaction * tx){
 
 //TODO
 //int remove_batch_from_transaction_pool(TransactionPool* pool, Transaction* tx){}
-
+//transaction_pool_free
 

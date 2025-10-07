@@ -2,6 +2,8 @@
 /build/
 /bin/
 /obj/
+.cache/
+compile_commands.json
 *.o
 *.a
 *.so

@@ -1,5 +1,5 @@
-#ifndef NODE_H
-#define NODE_H
+#ifndef TXPOOL_H
+#define TXPOOL_H
 
 
 #include <stdio.h>
@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <time.h>
 #include "block.h"
+#include "hash_set.h"
 
 
 #define TX_POOL_CAPACITY 100
@@ -25,6 +26,7 @@ typedef struct{
 typedef struct{
     TransactionNode * head;
     TransactionNode * tail;
+    hash_set_t * transaction_set;
     int size;
 } TransactionPool;
 
