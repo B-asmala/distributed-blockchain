@@ -10,12 +10,16 @@
 #include <openssl/err.h>
 #include <openssl/sha.h>
 #include <openssl/bn.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #include "txpool.h"
 #include "hash_set.h"
 #include "block.h"
 #include "keys.h"
+#include "orch.h"
 
-
+void setup_keys(int id);
 
 
 

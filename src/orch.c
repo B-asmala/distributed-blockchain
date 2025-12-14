@@ -7,7 +7,13 @@ int main() {
         fprintf(stderr, "couldn't make keys directoy\n");
         return 1;
     }
+
+    if(system("mkdir -p sockets") == -1){
+        fprintf(stderr, "couldn't make sockets directoy\n");
+        return 1;
     
+    }
+
     for (int i = 0; i < NUM_NODES; i++) {
         pid_t pid = fork();
         if (pid == 0) { // each node 
