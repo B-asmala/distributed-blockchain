@@ -3,24 +3,31 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <openssl/sha.h>
 #include <time.h>
+#include <openssl/sha.h>
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
 #include <openssl/sha.h>
 #include <openssl/bn.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/epoll.h>
 #include <unistd.h>
+#include <pthread.h>
 #include "txpool.h"
 #include "hash_set.h"
 #include "block.h"
 #include "keys.h"
 #include "orch.h"
 
+
+#define MAX_EVENTS 64
+#define BUFFER_SIZE 1024
+
 void setup_keys(int id);
-
-
-
+void * mining_thread(void * arg);
+void * transaction_generation_thread(void * arg);
+void * io_thread(void * arg);
 #endif
