@@ -24,7 +24,19 @@
 
 
 #define MAX_EVENTS 64
-#define BUFFER_SIZE 1024
+
+#define MAX_BUF 8192
+typedef enum { READ_TYPE, READ_LEN, READ_PAYLOAD } rx_state_t;
+
+typedef struct {
+    rx_state_t state;
+    uint8_t type;
+    uint32_t len;
+
+    uint8_t buff[MAX_BUF];
+    size_t buff_len;
+} Connection;
+
 
 void setup_keys(int id);
 void * mining_thread(void * arg);

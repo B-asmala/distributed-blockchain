@@ -6,7 +6,11 @@ int main(int argc, char* argv[]){
     pthread_t io, miner, tx_gen;
     int peer_fds[NUM_NODES - 1], node_fd, len;
     struct sockaddr_un node_addr, server_addr, client_addr;
-    char ch;
+    uint8_t type; // 0 for tx, 1 for block
+    Transaction tx;
+    Block blk;
+    RSA * public_keys[NUM_NODES];
+
 
     if(argc < 2){
         fprintf(stderr, "missing node id\n");
@@ -14,6 +18,7 @@ int main(int argc, char* argv[]){
     }
 
     id = atoi(argv[1]);
+
 
     setup_keys(id); //generate private and public keys for this node
 
@@ -58,13 +63,27 @@ int main(int argc, char* argv[]){
 
     printf("node %d established all its connections\n", id);
 
-    ch = '0' + id;
-    
-    //broadcast test data, my id for example 
-    for(int i = 0; i < NUM_NODES; i++){
-        write(peer_fds[i], &ch, 1);
-    }
 
+
+
+    
+    //broadcast test data, a dummy transaction for example
+    type = 0;
+    size_t sz;
+    sz = sizeof(Transaction);
+    tx.sender_ID = id;
+    tx.amount = 1000000000;
+
+    hash_transaction(&tx);
+
+    printf("node %d broadcasted this : ", id);
+    print_hash(tx.txid); 
+
+    for(int i = 0; i < NUM_NODES; i++){
+        write(peer_fds[i], &type, 1); // send type of data
+        write(peer_fds[i], &sz, sizeof(uint32_t)); // send size of data
+        write(peer_fds[i], &tx, sizeof(Transaction)); //send actual data
+    }
 
     //threads for: mining, generating transactions, handling IO
     pthread_create(&miner, NULL, mining_thread, NULL);
@@ -126,14 +145,42 @@ void setup_keys(int id){
 }
 
 void set_nonblocking(int fd) {
-  int flags = fcntl(fd, F_GETFL, 0);
-  if (flags == -1) {
-    perror("fcntl()");
-    return;
-  }
-  if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-    perror("fcntl()");
-  }
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1) {
+        perror("fcntl()");
+        return;
+    }
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        perror("fcntl()");
+    }
+}
+
+void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
+    if(type == 0){ //transaction
+        if(len > sizeof(Transaction)){
+            fprintf(stderr, "payload too big\n");
+            return;
+        }
+        Transaction tx;
+        memcpy(&tx, payload, len);
+
+        printf("i received this from node %u : ", tx.sender_ID);
+        print_hash(tx.txid);
+        printf("amount : %u\n", tx.amount);
+
+        // verify & add to txpool
+    }else{ //block
+        if(len > sizeof(Block)){
+            fprintf(stderr, "payload too big\n");
+            return;
+        }
+        Block blk;
+        memcpy(&blk, payload, len);
+
+        //verify & add to blockchain
+    }   
+
+
 }
 
 void * mining_thread(void * arg){
@@ -151,8 +198,8 @@ void * io_thread(void * arg){
 
     int fd, *fds = (int*) arg;
     struct epoll_event event, * events;
-    char buff[BUFFER_SIZE];
     ssize_t nbytes;
+    Connection conns[NUM_NODES + 3], * conn;
         
     //create epoll instance
     int epoll_fd = epoll_create1(0);
@@ -176,6 +223,13 @@ void * io_thread(void * arg){
         }
     }
 
+    // initialize connections state
+    for(int i = 0; i < NUM_NODES - 1; i ++){
+        conns[i].state = READ_TYPE;
+        conns[i].buff_len = 0;
+
+    }
+
     events = calloc(MAX_EVENTS, sizeof(event));
 
     while(1){
@@ -189,7 +243,7 @@ void * io_thread(void * arg){
 
         for(int i = 0; i < nevents; i ++){
             fd = events[i].data.fd;
-
+            conn = &conns[fd];
 
             // Check for errors
             if ((events[i].events & EPOLLERR) ||
@@ -200,23 +254,71 @@ void * io_thread(void * arg){
             }
 
 
+
             //read data
             //keep reading till we encounter EWOULDBLOCK
             while(1){
-                nbytes = read(fd, buff, sizeof(buff));
+                // read till the connection buffer is full 
+                nbytes = read(fd, conn->buff + conn->buff_len , sizeof(conn->buff) - conn->buff_len);
 
                 if(nbytes == -1){
                     if(errno == EAGAIN || errno == EWOULDBLOCK)break; //no more data to read
                     perror("read"); // else it is an actual error 
                     break;
-                }else if(nbytes == 0){ // socket closed by peer
+                }
+
+                if(nbytes == 0){ // socket closed by peer
                     printf("fd %d closed by peer\n", fd);
                     close(fd);
                     break;
-                }else{ // we actually read some data
-                    fwrite(buff, sizeof(char), nbytes, stdout); // write to stdout for now
-                    printf("\n");
                 }
+
+
+                // we actually read some data, we need to parse it
+                conn->buff_len += nbytes;
+
+                //parsing loop
+                size_t read_mark = 0; // next position to parse
+                while(1){
+                    if(conn->state == READ_TYPE){
+                        if(conn->buff_len - read_mark < sizeof(conn->type))break; // not enough bytes to read type, break and come back after reading more 
+                        
+                        conn->type = conn->buff[read_mark];
+                        read_mark ++;
+                        conn->state = READ_LEN;
+
+                    }
+
+                    if(conn->state == READ_LEN){
+                        if(conn->buff_len - read_mark < sizeof(conn->len))break;
+                        memcpy(&conn->len, conn->buff + read_mark, 4);
+                        read_mark += 4;
+                        conn->state = READ_PAYLOAD;
+                    }
+
+
+                    if(conn->state == READ_PAYLOAD){
+                        if(conn->buff_len - read_mark < conn->len)break;
+
+                        //else full payload is here, handle it
+                        handle_payload(conn->type, conn->len, conn->buff + read_mark);
+
+                        read_mark += conn->len;
+                        conn->state = READ_TYPE;
+
+
+
+                    }
+
+                }
+                
+                // move the leftovers to the beginning of the buffer
+                memmove(conn->buff, conn->buff + read_mark, conn->buff_len - read_mark);
+                conn->buff_len -= read_mark;
+
+
+
+                
                 
             }
 
