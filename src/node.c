@@ -1,38 +1,45 @@
 #include "node.h"
 
 
+
 int main(int argc, char* argv[]){
     int id;
     pthread_t io, miner, tx_gen;
-    int peer_fds[NUM_NODES - 1], node_fd, len;
+    int peer_fds[NUM_NODES - 1], node_fd;
     struct sockaddr_un node_addr, server_addr, client_addr;
-    uint8_t type; // 0 for tx, 1 for block
-    Transaction tx;
-    Block blk;
-    RSA * public_keys[NUM_NODES];
+    socklen_t len; 
+    // seed rand
+    srand(time(NULL));
 
 
+    // INITS
+    // get id of this node
     if(argc < 2){
         fprintf(stderr, "missing node id\n");
         return 1;
     }
+    id = atoi(argv[1]); 
 
-    id = atoi(argv[1]);
-
-
-    setup_keys(id); //generate private and public keys for this node
+    //generate private and public keys for this node
+    setup_keys(id);     
+    
 
     //sockets setup
     node_fd = socket(AF_UNIX, SOCK_STREAM, 0); //server socket fd for this node 
     node_addr.sun_family = AF_UNIX;
     sprintf(node_addr.sun_path, "sockets/node_%d", id);
     unlink(node_addr.sun_path);
-    bind(node_fd, (struct sockaddr *) &node_addr, sizeof(struct sockaddr_un));
-    listen(node_fd, 5);
+    if (bind(node_fd, (struct sockaddr *)&node_addr, sizeof(struct sockaddr_un)) == -1) {
+        perror("bind failed");
+        close(node_fd);   
+        exit(EXIT_FAILURE); 
+    }
+    listen(node_fd, 5); // start listening for clients
 
 
     len = sizeof(client_addr);
 
+    // establish mesh network
     // we need exactly one connection between each pair of nodes
     for(int i = 0; i < NUM_NODES; i ++){
         if(i < id){ //connect to all nodes before me using a client socket
@@ -64,30 +71,19 @@ int main(int argc, char* argv[]){
     printf("node %d established all its connections\n", id);
 
 
+    // init message queue
+    init_msg_queue();
+    msg_queue.wake_fd = eventfd(0, EFD_NONBLOCK);
+    if (msg_queue.wake_fd == -1) {
+        perror("eventfd");
+        exit(1);
+    }
 
 
     
-    //broadcast test data, a dummy transaction for example
-    type = 0;
-    size_t sz;
-    sz = sizeof(Transaction);
-    tx.sender_ID = id;
-    tx.amount = 1000000000;
-
-    hash_transaction(&tx);
-
-    printf("node %d broadcasted this : ", id);
-    print_hash(tx.txid); 
-
-    for(int i = 0; i < NUM_NODES; i++){
-        write(peer_fds[i], &type, 1); // send type of data
-        write(peer_fds[i], &sz, sizeof(uint32_t)); // send size of data
-        write(peer_fds[i], &tx, sizeof(Transaction)); //send actual data
-    }
-
     //threads for: mining, generating transactions, handling IO
     pthread_create(&miner, NULL, mining_thread, NULL);
-    pthread_create(&tx_gen, NULL, transaction_generation_thread, NULL);
+    pthread_create(&tx_gen, NULL, transaction_generation_thread, &id);
     pthread_create(&io, NULL, io_thread, peer_fds);
     
     pthread_join(miner, NULL);
@@ -106,9 +102,6 @@ int main(int argc, char* argv[]){
 void setup_keys(int id){
     char cmd[128], public_key_path[128], private_key_path[128];
 
-
-    
-    //printf("%d %s\n", id, argv[0]);
 
     //create directory for this node's keys
     sprintf(cmd, "mkdir -p keys/node_%d", id);
@@ -164,11 +157,11 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
         Transaction tx;
         memcpy(&tx, payload, len);
 
-        printf("i received this from node %u : ", tx.sender_ID);
-        print_hash(tx.txid);
-        printf("amount : %u\n", tx.amount);
-
         // verify & add to txpool
+        printf("i reced from node %d ", tx.sender_ID);
+        print_hash(tx.txid);
+        
+
     }else{ //block
         if(len > sizeof(Block)){
             fprintf(stderr, "payload too big\n");
@@ -190,16 +183,64 @@ void * mining_thread(void * arg){
 }
 
 void * transaction_generation_thread(void * arg){
-    while(1){}
+    char private_key_path[128];
+    RSA * rsa_priv;
+    int rec_id, id = *(int *)arg, type = 0;
+    Transaction tx;
+    uint32_t sz = sizeof(Transaction);
+    uint64_t one = 1;
+    Msg * msg;
+
+    sprintf(private_key_path, PRIVATE_KEY_PATH, id);
+    rsa_priv = load_private_key(private_key_path);
+
+    while(1){
+        // generate a new tx every random period
+        sleep(rand() % 30);
+
+        // random reciever 
+        do {
+            rec_id = rand() % NUM_NODES;
+        }while(rec_id == id);
+
+        tx.sender_ID = id;
+        tx.receiver_ID = rec_id;
+        tx.amount = rand() % 1000000;
+        tx.timestamp = (uint32_t)time(NULL);
+
+        hash_transaction(&tx);
+        sign_transaction(&tx, rsa_priv);
+
+
+        //serialize tx ond add to msg q
+        msg = malloc(sizeof(Msg));
+        msg->len = 1 + sizeof(sz) + sizeof(tx);
+        memcpy(msg->data, &type, 1);
+        memcpy(msg->data + 1, &sz, sizeof(sz));
+        memcpy(msg->data + 1 + sizeof(sz), &tx, sizeof(tx));
+
+        pthread_mutex_lock(&msg_queue.lock);
+        enqueue_to_msg_queue(msg);
+        pthread_mutex_unlock(&msg_queue.lock);
+
+
+        //signal for io thread to broadcast
+        write(msg_queue.wake_fd, &one, sizeof(one));
+        printf("i generated : ");
+        print_hash(tx.txid);
+
+        
+    }
     return NULL;
 }
 
 void * io_thread(void * arg){
 
-    int fd, *fds = (int*) arg;
+    int fd, *fds = (int*) arg, wfd = msg_queue.wake_fd;
     struct epoll_event event, * events;
-    ssize_t nbytes;
-    Connection conns[NUM_NODES + 3], * conn;
+    Connection conns[NUM_NODES + 10], * conn;
+
+
         
     //create epoll instance
     int epoll_fd = epoll_create1(0);
@@ -211,7 +252,15 @@ void * io_thread(void * arg){
 
     memset(&event, 0, sizeof(event));
 
-    // register fds in the epoll interest list
+    // register message queue wake fd 
+    event.events = EPOLLIN;
+    event.data.fd = wfd;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, wfd, &event) == -1) {
+        perror("epoll_ctl wake_fd");
+        exit(1);
+    }
+
+    // register peer fds in the epoll interest list
     for(int i = 0; i < NUM_NODES - 1; i ++){
         set_nonblocking(fds[i]);
 
@@ -240,17 +289,66 @@ void * io_thread(void * arg){
             break;
         }
 
-
         for(int i = 0; i < nevents; i ++){
             fd = events[i].data.fd;
             conn = &conns[fd];
 
             // Check for errors
-            if ((events[i].events & EPOLLERR) ||
-                (events[i].events & EPOLLHUP) ||
-                (!(events[i].events & EPOLLIN))) {
+            if (events[i].events & (EPOLLERR | EPOLLHUP)){
                 fprintf(stderr, "epoll error on fd %d\n", fd);
                 break;
+            }
+
+            
+            // new message to broadcast 
+            if(fd == wfd){
+                //drain wake up 
+                while(1){
+                    uint64_t x;
+                    Msg * msg = NULL;
+                    ssize_t nbytes = read(wfd, &x, sizeof(x));
+
+                    if(nbytes == -1){
+                        if(errno == EAGAIN || errno == EWOULDBLOCK)break; //fully drained
+                        perror("read"); // else it is an actual error 
+                        break;
+                    }
+
+
+
+                    //broadcast the message
+                    pthread_mutex_lock(&msg_queue.lock);
+                    msg = dequeue_from_msg_queue();
+                    pthread_mutex_unlock(&msg_queue.lock);
+                    if(msg){
+                        for(int i = 0; i < NUM_NODES - 1; i++){
+                            int fd = fds[i];
+                            size_t total_sent = 0;
+
+                            while (total_sent < msg->len) {
+                                ssize_t n = write(fd, msg->data + total_sent, msg->len - total_sent);
+                                if (n > 0) {
+                                    total_sent += n;
+                                } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                                    // try again
+                                    // TODO: store rest in an out buffer and try again later?
+                                    continue;
+                                } else {
+                                    perror("write");
+                                    // optionally close fd
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    free(msg);
+
+                }
+
+
+
+                continue; //to the next event
             }
 
 
@@ -259,7 +357,7 @@ void * io_thread(void * arg){
             //keep reading till we encounter EWOULDBLOCK
             while(1){
                 // read till the connection buffer is full 
-                nbytes = read(fd, conn->buff + conn->buff_len , sizeof(conn->buff) - conn->buff_len);
+                ssize_t nbytes = read(fd, conn->buff + conn->buff_len , sizeof(conn->buff) - conn->buff_len);
 
                 if(nbytes == -1){
                     if(errno == EAGAIN || errno == EWOULDBLOCK)break; //no more data to read
@@ -316,9 +414,6 @@ void * io_thread(void * arg){
                 memmove(conn->buff, conn->buff + read_mark, conn->buff_len - read_mark);
                 conn->buff_len -= read_mark;
 
-
-
-                
                 
             }
 

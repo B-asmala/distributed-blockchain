@@ -2,6 +2,7 @@
 #define NODE_H
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <openssl/sha.h>
@@ -21,7 +22,7 @@
 #include "block.h"
 #include "keys.h"
 #include "orch.h"
-
+#include "msg_queue.h"
 
 #define MAX_EVENTS 64
 
