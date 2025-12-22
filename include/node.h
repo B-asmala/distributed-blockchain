@@ -38,8 +38,11 @@ typedef struct {
     size_t buff_len;
 } Connection;
 
+static RSA ** public_keys;
+static int ID;
 
-void setup_keys(int id);
+void setup_keys();
+void load_public_keys();
 void * mining_thread(void * arg);
 void * transaction_generation_thread(void * arg);
 void * io_thread(void * arg);

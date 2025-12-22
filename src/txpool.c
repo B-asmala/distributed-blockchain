@@ -1,88 +1,67 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <openssl/sha.h>
-#include <time.h>
-#include "block.h"
 #include "txpool.h"
-#include "hash_set.h"
 
-TransactionPool * init_transaction_pool(){
-    TransactionPool * pool = malloc(sizeof(TransactionPool));
-    if(pool == NULL){
-        return NULL;
-    }
-    pool->size = 0;
-    pool->head = NULL;
-    pool->tail = NULL;
-    pool->transaction_set = NULL;
-    return pool;
+void init_transaction_pool(){
+    tx_pool.head = tx_pool.tail = NULL;
+    pthread_mutex_init(&tx_pool.lock, NULL);
 }
 
-int enqueue_to_transaction_pool(TransactionPool* pool, Transaction* tx){
-    if(pool == NULL || tx == NULL){
+int enqueue_to_transaction_pool(Transaction* tx){
+    if(tx == NULL){
         return 1;
-    }
-
-    if(pool->size >= TX_POOL_CAPACITY){
-        return 1;
-    }
-
-    if(hash_set_contains(&(pool->transaction_set), tx->txid)){
-        return 1; //might need to change this
     }
 
     TransactionNode * txn = malloc(sizeof(TransactionNode));
 
+    pthread_mutex_lock(&tx_pool.lock); 
     txn->current = tx;
     txn->next = NULL;
 
-    if(pool->tail){
-        pool->tail->next = txn;
-
+    if(tx_pool.tail == NULL){
+        tx_pool.head = txn;
     }else{
-        pool->head = txn;
+        tx_pool.tail->next = txn;
     }
 
-    pool->tail = txn;
-    pool->size ++;
-    hash_set_add(&(pool->transaction_set), tx->txid);
+    tx_pool.tail = txn;
+    pthread_mutex_unlock(&tx_pool.lock);
+
 
     return 0;
 }
 
-int dequeue_from_transaction_pool(TransactionPool * pool, Transaction * tx){
-    if(pool == NULL || tx == NULL){
-        return 1;
+Transaction * dequeue_from_transaction_pool(){
+    if(tx_pool.head == NULL)return NULL;
+
+    TransactionNode * txn = tx_pool.head;
+    Transaction * tx = txn->current;
+
+
+    if(tx_pool.head->next == NULL){
+        tx_pool.tail = NULL;
     }
 
-    if(pool->size <= 0){
-        return 1;
-    }
-
+    tx_pool.head = tx_pool.head->next;
     
-    TransactionNode * txn = pool->head;
-    pool->head = txn->next;
-
-    if(pool->head == NULL){
-        pool->tail = NULL;
-    }
-    pool->size --;
-
-
-    *tx = *(txn->current);
     free(txn);
     
-    //might not need to immediately remove it from the hash table
-    //hash_set_remove(&(pool->transaction_set), tx->txid);
-
-
-
-    return 0;
+    return tx;
 }
 
-//TODO
-//int remove_batch_from_transaction_pool(TransactionPool* pool, Transaction* tx){}
-//transaction_pool_free
+Transaction ** dequeue_batch_from_transaction_pool(){
+    
+    Transaction ** tx_arr = malloc(BLOCK_SIZE * sizeof(Transaction *));
+    Transaction * tx = NULL;
 
+    for(int i = 0; i < BLOCK_SIZE; i ++){
+        while(tx == NULL){
+            pthread_mutex_lock(&tx_pool.lock);
+            tx = dequeue_from_transaction_pool();
+            pthread_mutex_unlock(&tx_pool.lock);
+        }
+
+        tx_arr[i] = tx;
+        tx = NULL;
+    }
+
+    return tx_arr;
+}

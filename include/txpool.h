@@ -6,33 +6,26 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <time.h>
+#include <pthread.h>
 #include "block.h"
-#include "hash_set.h"
 
-
-#define TX_POOL_CAPACITY 100
-
-
-
-
-typedef struct{
+typedef struct TransactionNode{
     Transaction * current;
     struct TransactionNode * next;
-    // prev?
 
 } TransactionNode;
 
-
-typedef struct{
-    TransactionNode * head;
-    TransactionNode * tail;
-    hash_set_t * transaction_set;
-    int size;
+typedef struct {
+    TransactionNode *head;
+    TransactionNode *tail;
+    pthread_mutex_t lock;
 } TransactionPool;
 
+static TransactionPool tx_pool;
 
-TransactionPool * init_transaction_pool();
-int enqueue_to_transaction_pool(TransactionPool* pool, Transaction* tx);
-int dequeue_from_transaction_pool(TransactionPool* pool, Transaction* tx);
 
+void init_transaction_pool();
+int enqueue_to_transaction_pool(Transaction* tx);
+Transaction * dequeue_from_transaction_pool();
+Transaction ** dequeue_batch_from_transaction_pool();
 #endif

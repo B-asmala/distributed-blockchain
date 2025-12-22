@@ -3,7 +3,6 @@
 
 
 int main(int argc, char* argv[]){
-    int id;
     pthread_t io, miner, tx_gen;
     int peer_fds[NUM_NODES - 1], node_fd;
     struct sockaddr_un node_addr, server_addr, client_addr;
@@ -18,16 +17,16 @@ int main(int argc, char* argv[]){
         fprintf(stderr, "missing node id\n");
         return 1;
     }
-    id = atoi(argv[1]); 
+    ID = atoi(argv[1]); 
 
     //generate private and public keys for this node
-    setup_keys(id);     
+    setup_keys(ID);     
     
 
     //sockets setup
     node_fd = socket(AF_UNIX, SOCK_STREAM, 0); //server socket fd for this node 
     node_addr.sun_family = AF_UNIX;
-    sprintf(node_addr.sun_path, "sockets/node_%d", id);
+    sprintf(node_addr.sun_path, "sockets/node_%d", ID);
     unlink(node_addr.sun_path);
     if (bind(node_fd, (struct sockaddr *)&node_addr, sizeof(struct sockaddr_un)) == -1) {
         perror("bind failed");
@@ -42,7 +41,7 @@ int main(int argc, char* argv[]){
     // establish mesh network
     // we need exactly one connection between each pair of nodes
     for(int i = 0; i < NUM_NODES; i ++){
-        if(i < id){ //connect to all nodes before me using a client socket
+        if(i < ID){ //connect to all nodes before me using a client socket
             peer_fds[i] = socket(AF_UNIX, SOCK_STREAM, 0);
             server_addr.sun_family = AF_UNIX;
             sprintf(server_addr.sun_path, "sockets/node_%d", i);
@@ -52,9 +51,9 @@ int main(int argc, char* argv[]){
                 sleep(1);
             }
 
-            printf("node %d connected to node %d\n", id, i);
+            printf("node %d connected to node %d\n", ID, i);
 
-        }else if(i > id){ //accept all nodes after me using the server socket
+        }else if(i > ID){ //accept all nodes after me using the server socket
             peer_fds[i - 1] = accept(node_fd, (struct sockaddr *) &client_addr, &len);
 
             if(peer_fds[i - 1] == -1){
@@ -68,7 +67,7 @@ int main(int argc, char* argv[]){
 
     close(node_fd);//stop listening for more clients
 
-    printf("node %d established all its connections\n", id);
+    printf("node %d established all its connections\n", ID);
 
 
     // init message queue
@@ -80,10 +79,13 @@ int main(int argc, char* argv[]){
     }
 
 
+    //load public keys
+    load_public_keys();
+
     
     //threads for: mining, generating transactions, handling IO
     pthread_create(&miner, NULL, mining_thread, NULL);
-    pthread_create(&tx_gen, NULL, transaction_generation_thread, &id);
+    pthread_create(&tx_gen, NULL, transaction_generation_thread, NULL);
     pthread_create(&io, NULL, io_thread, peer_fds);
     
     pthread_join(miner, NULL);
@@ -99,20 +101,20 @@ int main(int argc, char* argv[]){
 
 
 
-void setup_keys(int id){
+void setup_keys(){
     char cmd[128], public_key_path[128], private_key_path[128];
 
 
     //create directory for this node's keys
-    sprintf(cmd, "mkdir -p keys/node_%d", id);
+    sprintf(cmd, "mkdir -p keys/node_%d", ID);
     if(system(cmd) == -1){
-        fprintf(stderr, "couldn't make directory for node %d", id);
+        fprintf(stderr, "couldn't make directory for node %d", ID);
         exit(1);
     }
     
 
-    sprintf(public_key_path, PUBLIC_KEY_PATH, id);
-    sprintf(private_key_path, PRIVATE_KEY_PATH, id);
+    sprintf(public_key_path, PUBLIC_KEY_PATH, ID);
+    sprintf(private_key_path, PRIVATE_KEY_PATH, ID);
 
     // If keys don’t exist, generate them 
     FILE *fp = fopen(private_key_path, "r");
@@ -121,20 +123,31 @@ void setup_keys(int id){
     } else {
         fclose(fp);
     } 
-    // Load keys
+    // try loading keys
     RSA *rsa_priv = load_private_key(private_key_path);
     RSA *rsa_pub  = load_public_key(public_key_path);
     if (!rsa_priv || !rsa_pub) {
-        fprintf(stderr, "node %d couldn't load keys\n", id);
+        fprintf(stderr, "node %d couldn't load keys\n", ID);
         exit(1);
     }
 
-    printf("node %d done generating keys\n", id);
+    printf("node %d done generating keys\n", ID);
 
+}
 
+void load_public_keys(){
+    public_keys = malloc(NUM_NODES * sizeof(RSA *));
+    if (!public_keys) {
+        perror("malloc public_keys");
+        exit(1);
+    }
 
-
-
+    char public_key_path[128];
+    
+    for(int i = 0; i < NUM_NODES; i ++){
+        sprintf(public_key_path, PUBLIC_KEY_PATH, i);
+        public_keys[i] = load_public_key(public_key_path);
+    }
 }
 
 void set_nonblocking(int fd) {
@@ -154,13 +167,17 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
             fprintf(stderr, "payload too big\n");
             return;
         }
-        Transaction tx;
-        memcpy(&tx, payload, len);
+        Transaction * tx = malloc(sizeof(Transaction));
+        memcpy(tx, payload, len);
 
         // verify & add to txpool
-        printf("i reced from node %d ", tx.sender_ID);
-        print_hash(tx.txid);
-        
+        if(verify_transaction_signature(tx, public_keys[tx->sender_ID])){
+            enqueue_to_transaction_pool(tx);
+        }else{
+            printf(">>>>>>>>>>>>> i received a scam transaction from %d \n", tx->sender_ID);
+            free(tx);
+        }
+                
 
     }else{ //block
         if(len > sizeof(Block)){
@@ -177,7 +194,27 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
 }
 
 void * mining_thread(void * arg){
-    while(1){}
+    Transaction ** tx_arr;
+    Block * blk; 
+    while(1){
+
+        tx_arr = dequeue_batch_from_transaction_pool();
+        blk = malloc(sizeof(Block));
+        
+        for(int i = 0; i < BLOCK_SIZE; i ++){
+            blk->transactions[i] = *tx_arr[i];
+            printf("tx %d of %d block is from node %d : ", i, ID, tx_arr[i]->sender_ID);
+            print_hash(tx_arr[i]->txid);
+            free(tx_arr[i]);
+        }
+        free(tx_arr);
+
+        printf("%d : new block here\n", ID);
+
+        free(blk); //remove when implementing the blockchain
+        
+
+    }
     return NULL;
 
 }
@@ -185,13 +222,13 @@ void * mining_thread(void * arg){
 void * transaction_generation_thread(void * arg){
     char private_key_path[128];
     RSA * rsa_priv;
-    int rec_id, id = *(int *)arg, type = 0;
-    Transaction tx;
+    int rec_id, type = 0;
+    Transaction * tx= NULL;
     uint32_t sz = sizeof(Transaction);
     uint64_t one = 1;
     Msg * msg;
 
-    sprintf(private_key_path, PRIVATE_KEY_PATH, id);
+    sprintf(private_key_path, PRIVATE_KEY_PATH, ID);
     rsa_priv = load_private_key(private_key_path);
 
     while(1){
@@ -201,33 +238,34 @@ void * transaction_generation_thread(void * arg){
         // random reciever 
         do {
             rec_id = rand() % NUM_NODES;
-        }while(rec_id == id);
+        }while(rec_id == ID);
 
-        tx.sender_ID = id;
-        tx.receiver_ID = rec_id;
-        tx.amount = rand() % 1000000;
-        tx.timestamp = (uint32_t)time(NULL);
+        tx = malloc(sizeof(Transaction));
+        tx->sender_ID = ID;
+        tx->receiver_ID = rec_id;
+        tx->amount = rand() % 1000000;
+        tx->timestamp = (uint32_t)time(NULL);
 
-        hash_transaction(&tx);
-        sign_transaction(&tx, rsa_priv);
+        hash_transaction(tx);
+        sign_transaction(tx, rsa_priv);
 
 
-        //serialize tx ond add to msg q
+        //add to your own tx pool
+        enqueue_to_transaction_pool(tx);
+
+        //serialize tx ond add to msg q to be broadcasted to other nodes
         msg = malloc(sizeof(Msg));
-        msg->len = 1 + sizeof(sz) + sizeof(tx);
+        msg->len = 1 + sizeof(sz) + sizeof(Transaction);
         memcpy(msg->data, &type, 1);
         memcpy(msg->data + 1, &sz, sizeof(sz));
-        memcpy(msg->data + 1 + sizeof(sz), &tx, sizeof(tx));
+        memcpy(msg->data + 1 + sizeof(sz), tx, sizeof(Transaction));
 
-        pthread_mutex_lock(&msg_queue.lock);
         enqueue_to_msg_queue(msg);
-        pthread_mutex_unlock(&msg_queue.lock);
-
 
         //signal for io thread to broadcast
         write(msg_queue.wake_fd, &one, sizeof(one));
-        printf("i generated : ");
-        print_hash(tx.txid);
+        printf("node %d generated : ", ID);
+        print_hash(tx->txid);
 
         
     }
@@ -252,7 +290,8 @@ void * io_thread(void * arg){
 
     memset(&event, 0, sizeof(event));
 
-    // register message queue wake fd 
+    // register message queue wake fd
+    set_nonblocking(wfd);
     event.events = EPOLLIN;
     event.data.fd = wfd;
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, wfd, &event) == -1) {
@@ -317,9 +356,7 @@ void * io_thread(void * arg){
 
 
                     //broadcast the message
-                    pthread_mutex_lock(&msg_queue.lock);
                     msg = dequeue_from_msg_queue();
-                    pthread_mutex_unlock(&msg_queue.lock);
                     if(msg){
                         for(int i = 0; i < NUM_NODES - 1; i++){
                             int fd = fds[i];
