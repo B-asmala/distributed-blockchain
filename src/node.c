@@ -1,6 +1,9 @@
 #include "node.h"
 
 
+RSA ** public_keys;
+int ID;
+
 
 int main(int argc, char* argv[]){
     pthread_t io, miner, tx_gen;
@@ -29,7 +32,7 @@ int main(int argc, char* argv[]){
     sprintf(node_addr.sun_path, "sockets/node_%d", ID);
     unlink(node_addr.sun_path);
     if (bind(node_fd, (struct sockaddr *)&node_addr, sizeof(struct sockaddr_un)) == -1) {
-        perror("bind failed");
+ perror("bind failed");
         close(node_fd);   
         exit(EXIT_FAILURE); 
     }
@@ -78,10 +81,14 @@ int main(int argc, char* argv[]){
         exit(1);
     }
 
+    // init transaction pool
+    init_transaction_pool(); 
 
     //load public keys
     load_public_keys();
 
+    // init blockchain
+    init_blockchain();
     
     //threads for: mining, generating transactions, handling IO
     pthread_create(&miner, NULL, mining_thread, NULL);
@@ -97,8 +104,6 @@ int main(int argc, char* argv[]){
 
 
 }
-
-
 
 
 void setup_keys(){
@@ -170,6 +175,7 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
         Transaction * tx = malloc(sizeof(Transaction));
         memcpy(tx, payload, len);
 
+
         // verify & add to txpool
         if(verify_transaction_signature(tx, public_keys[tx->sender_ID])){
             enqueue_to_transaction_pool(tx);
@@ -184,10 +190,26 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
             fprintf(stderr, "payload too big\n");
             return;
         }
-        Block blk;
-        memcpy(&blk, payload, len);
+
+        Block * blk = malloc(sizeof(Block));
+        memcpy(blk, payload, len);
+
 
         //verify & add to blockchain
+        if(verify_block(blk, public_keys)){
+            if(add_to_blockchain(blk) == 0){ // block added successfully
+                atomic_store(&interrupt_mining, true);
+                write_longest_chain(ID);
+            }
+        }else{
+            printf(">>>>>>>>>>>>> i received a scam block with hash : ");
+            print_hash(blk->hash);
+        }
+
+
+        free(blk);
+        
+
     }   
 
 
@@ -195,25 +217,56 @@ void handle_payload(uint8_t type, uint32_t len, uint8_t * payload){
 
 void * mining_thread(void * arg){
     Transaction ** tx_arr;
-    Block * blk; 
-    while(1){
+    Block * blk = NULL;
+    blk = malloc(sizeof(Block));
+    int type = 1;
+    uint32_t sz = sizeof(Block);
+    uint64_t one = 1;
+    Msg * msg;
 
+
+
+    if (!blk) {
+        perror("malloc Block");
+        exit(1);
+    }
+
+    while(1){
+        atomic_store(&interrupt_mining, false);
+        blk->header.timestamp = (uint32_t)time(NULL);
+        memcpy(blk->header.previous_hash, blockchain.longest_end->current.hash, sizeof(hash_t));
         tx_arr = dequeue_batch_from_transaction_pool();
-        blk = malloc(sizeof(Block));
-        
         for(int i = 0; i < BLOCK_SIZE; i ++){
             blk->transactions[i] = *tx_arr[i];
-            printf("tx %d of %d block is from node %d : ", i, ID, tx_arr[i]->sender_ID);
-            print_hash(tx_arr[i]->txid);
             free(tx_arr[i]);
         }
         free(tx_arr);
 
-        printf("%d : new block here\n", ID);
+        calculate_merkle_root(blk);
 
-        free(blk); //remove when implementing the blockchain
-        
+        if(mine_block(blk) == 0){ // success
+            add_to_blockchain(blk);
+            printf("node %d just mined a block! \n", ID);
+            write_longest_chain(ID);
+            
 
+            msg = malloc(sizeof(Msg));
+            msg->len = 1 + sizeof(sz) + sizeof(Block);
+            memcpy(msg->data, &type, 1);
+            memcpy(msg->data + 1, &sz, sizeof(sz));
+            memcpy(msg->data + 1 + sizeof(sz), blk, sizeof(Block));
+
+            enqueue_to_msg_queue(msg);
+
+            //signal for io thread to broadcast
+            write(msg_queue.wake_fd, &one, sizeof(one));
+            continue;
+
+
+
+        }
+
+        //printf("node %d iterrupted while mining \n", ID);
     }
     return NULL;
 
@@ -233,7 +286,7 @@ void * transaction_generation_thread(void * arg){
 
     while(1){
         // generate a new tx every random period
-        sleep(rand() % 30);
+        sleep(rand() % 10);
 
         // random reciever 
         do {
@@ -264,7 +317,7 @@ void * transaction_generation_thread(void * arg){
 
         //signal for io thread to broadcast
         write(msg_queue.wake_fd, &one, sizeof(one));
-        printf("node %d generated : ", ID);
+        printf("node %d made a transaction : ", ID);
         print_hash(tx->txid);
 
         
@@ -366,13 +419,12 @@ void * io_thread(void * arg){
                                 ssize_t n = write(fd, msg->data + total_sent, msg->len - total_sent);
                                 if (n > 0) {
                                     total_sent += n;
-                                } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+                                } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
                                     // try again
                                     // TODO: store rest in an out buffer and try again later?
                                     continue;
                                 } else {
                                     perror("write");
-                                    // optionally close fd
                                     break;
                                 }
                             }

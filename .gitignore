@@ -2,6 +2,9 @@
 /build/
 /bin/
 /obj/
+keys/
+sockets/
+blockchains/
 .cache/
 compile_commands.json
 *.o

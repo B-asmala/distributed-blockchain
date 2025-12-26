@@ -14,6 +14,12 @@ int main() {
     
     }
 
+    if(system("mkdir -p blockchains") == -1){
+        fprintf(stderr, "couldn't make blockchains directoy\n");
+        return 1;
+    
+    }
+
     for (int i = 0; i < NUM_NODES; i++) {
         pid_t pid = fork();
         if (pid == 0) { // each node 
@@ -24,6 +30,7 @@ int main() {
             exit(1);
         }
     }
+    
     for (int i = 0; i < NUM_NODES; i++) wait(NULL);
 }
 

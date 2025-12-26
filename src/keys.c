@@ -1,6 +1,7 @@
 #include "keys.h"
 
 
+// TODO: Update to EVP API fully to avoid OpenSSL 3.x deprecation warnings
 
 // Generate RSA keypair and save to PEM files
 void generate_keys(const char * public_key_path, const char * private_key_path) {

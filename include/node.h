@@ -17,9 +17,9 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <stdbool.h>
 #include "txpool.h"
-#include "hash_set.h"
-#include "block.h"
+#include "blockchain.h"
 #include "keys.h"
 #include "orch.h"
 #include "msg_queue.h"
@@ -38,8 +38,8 @@ typedef struct {
     size_t buff_len;
 } Connection;
 
-static RSA ** public_keys;
-static int ID;
+extern RSA ** public_keys;
+extern int ID;
 
 void setup_keys();
 void load_public_keys();

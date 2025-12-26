@@ -20,7 +20,7 @@ typedef struct {
     int wake_fd;
 } MsgQueue;
 
-static MsgQueue msg_queue;
+extern MsgQueue msg_queue;
 
 void init_msg_queue();
 int enqueue_to_msg_queue(Msg * msg);

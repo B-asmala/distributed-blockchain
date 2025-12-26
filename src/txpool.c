@@ -1,5 +1,7 @@
 #include "txpool.h"
 
+TransactionPool tx_pool;
+
 void init_transaction_pool(){
     tx_pool.head = tx_pool.tail = NULL;
     pthread_mutex_init(&tx_pool.lock, NULL);

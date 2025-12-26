@@ -1,5 +1,7 @@
 #include "msg_queue.h"
 
+MsgQueue msg_queue;
+
 void init_msg_queue(){
 
     msg_queue.head = msg_queue.tail = NULL;
@@ -28,7 +30,11 @@ int enqueue_to_msg_queue(Msg * msg){
 Msg * dequeue_from_msg_queue(void){
 
     pthread_mutex_lock(&msg_queue.lock);
-    if(msg_queue.head == NULL)return NULL;
+    if(msg_queue.head == NULL){
+        
+        pthread_mutex_unlock(&msg_queue.lock);
+        return NULL;
+    }
 
     Msg * msg = msg_queue.head;
 
@@ -40,7 +46,6 @@ Msg * dequeue_from_msg_queue(void){
     
 
     pthread_mutex_unlock(&msg_queue.lock);
-
     return msg;
 
     

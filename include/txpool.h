@@ -21,7 +21,7 @@ typedef struct {
     pthread_mutex_t lock;
 } TransactionPool;
 
-static TransactionPool tx_pool;
+extern TransactionPool tx_pool;
 
 
 void init_transaction_pool();

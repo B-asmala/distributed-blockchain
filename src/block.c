@@ -1,6 +1,9 @@
 #include "block.h"
 
 
+atomic_bool interrupt_mining;
+
+
 void calculate_merkle_root(Block * block){
     hash_t hashes[BLOCK_SIZE];
     int length = BLOCK_SIZE;
@@ -33,12 +36,10 @@ void calculate_merkle_root(Block * block){
 
 void serialize_block_header(BlockHeader * blckhdr, uint8_t * buffer){
     
-    //TODO handle little endian
-    memcpy(buffer, &blckhdr->index, 4);
-    memcpy(buffer + 4, &blckhdr->nonce, 4); 
-    memcpy(buffer + 8, &blckhdr->timestamp, 4); 
-    memcpy(buffer + 12, blckhdr->previous_hash, HASH_SIZE); 
-    memcpy(buffer + 44, blckhdr->merkle_root, HASH_SIZE); 
+    memcpy(buffer, &blckhdr->nonce, 4); 
+    memcpy(buffer + 4, &blckhdr->timestamp, 4); 
+    memcpy(buffer + 8, blckhdr->previous_hash, HASH_SIZE); 
+    memcpy(buffer + 40, blckhdr->merkle_root, HASH_SIZE); 
 
 }
 
@@ -50,6 +51,8 @@ int mine_block(Block * block){
     block->header.nonce = 1;
     
     while(1){
+        if(atomic_load(&interrupt_mining))return 1;
+
         serialize_block_header(&block->header, serialized_data);
         hash_data(serialized_data, sizeof(serialized_data), hash);
 
@@ -75,8 +78,39 @@ int mine_block(Block * block){
 
     return 1;
 
-
-
 }
+
+int verify_block(Block * block, RSA ** public_keys){
+    // verify transactions
+
+    for(int i = 0; i < BLOCK_SIZE; i ++){
+        if(!verify_transaction_signature(&block->transactions[i], public_keys[block->transactions[i].sender_ID]))return 0;
+    }
+
+    
+    // check merkle root
+    hash_t hash; 
+    memcpy(hash, block->header.merkle_root, sizeof(hash_t));
+    calculate_merkle_root(block); // calculate merkle root
+    if(memcmp(hash, block->header.merkle_root, sizeof(hash_t)) != 0)return 0;
+
+    // check the hash
+    uint8_t serialized_data[sizeof(BlockHeader)];
+    serialize_block_header(&block->header, serialized_data);
+    hash_data(serialized_data, sizeof(serialized_data), hash);
+    if(memcmp(hash, block->hash, sizeof(hash_t)) != 0)return 0;
+
+    // check target
+    for(int i = 0; i < TARGET; i ++){
+        if(hash[i] != 0){
+            return 0;
+        }
+    }
+
+
+
+    return 1;
+}
+
 
 
