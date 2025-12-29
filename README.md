@@ -22,7 +22,7 @@ It combines OS concepts with core blockchain mechanics to achieve efficient, sca
 ## Architecture
 
 ### Process Structure
-- **Orchestrator Process**: Spawns all node processes using `fork()`, sets up socket paths, and coordinates clean shutdown.
+- **Orchestrator Process**: Spawns all node processes using `fork()`, creates shared directories, and coordinates clean shutdown.
 - **Node Processes**: Independent full peers, each running three dedicated threads.
 
 ### Threading Model (Per Node)
