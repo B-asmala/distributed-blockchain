@@ -16,6 +16,11 @@ void init_blockchain(){
 int add_to_blockchain(Block * blk){
     pthread_mutex_lock(&blockchain.lock);
 
+    if(blockchain.size >= CHAIN_MAX){
+        pthread_mutex_unlock(&blockchain.lock);
+        return 1; // workaround to prevent memory leaks
+    } 
+
     if(hash_map_get(&blockchain.block_map, blk->hash)){
         pthread_mutex_unlock(&blockchain.lock);
         return 1; //already exists
@@ -38,6 +43,8 @@ int add_to_blockchain(Block * blk){
         blockchain.max_height = new->height;
         blockchain.longest_end = new;
     }
+
+    blockchain.size ++;
 
     pthread_mutex_unlock(&blockchain.lock);
     return 0;

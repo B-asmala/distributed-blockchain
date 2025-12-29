@@ -34,8 +34,11 @@ typedef struct {
     uint8_t type;
     uint32_t len;
 
-    uint8_t buff[MAX_BUF];
-    size_t buff_len;
+    uint8_t inbuff[MAX_BUF];
+    size_t inbuff_len;
+
+    size_t written_len;
+    Msg * current_msg;
 } Connection;
 
 extern RSA ** public_keys;

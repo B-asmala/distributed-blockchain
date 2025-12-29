@@ -32,7 +32,7 @@ int main(int argc, char* argv[]){
     sprintf(node_addr.sun_path, "sockets/node_%d", ID);
     unlink(node_addr.sun_path);
     if (bind(node_fd, (struct sockaddr *)&node_addr, sizeof(struct sockaddr_un)) == -1) {
- perror("bind failed");
+        perror("bind failed");
         close(node_fd);   
         exit(EXIT_FAILURE); 
     }
@@ -255,6 +255,7 @@ void * mining_thread(void * arg){
             memcpy(msg->data, &type, 1);
             memcpy(msg->data + 1, &sz, sizeof(sz));
             memcpy(msg->data + 1 + sizeof(sz), blk, sizeof(Block));
+            msg->rem_writes = NUM_NODES - 1;
 
             enqueue_to_msg_queue(msg);
 
@@ -312,6 +313,7 @@ void * transaction_generation_thread(void * arg){
         memcpy(msg->data, &type, 1);
         memcpy(msg->data + 1, &sz, sizeof(sz));
         memcpy(msg->data + 1 + sizeof(sz), tx, sizeof(Transaction));
+        msg->rem_writes = NUM_NODES - 1;
 
         enqueue_to_msg_queue(msg);
 
@@ -328,8 +330,8 @@ void * transaction_generation_thread(void * arg){
 void * io_thread(void * arg){
 
     int fd, *fds = (int*) arg, wfd = msg_queue.wake_fd;
-    struct epoll_event event, * events;
     Connection conns[NUM_NODES + 10], * conn;
+    struct epoll_event event, * events;
 
 
         
@@ -366,9 +368,10 @@ void * io_thread(void * arg){
 
     // initialize connections state
     for(int i = 0; i < NUM_NODES - 1; i ++){
-        conns[i].state = READ_TYPE;
-        conns[i].buff_len = 0;
-
+        conns[fds[i]].state = READ_TYPE;
+        conns[fds[i]].inbuff_len = 0;
+        conns[fds[i]].current_msg = NULL;
+        conns[fds[i]].written_len = 0;
     }
 
     events = calloc(MAX_EVENTS, sizeof(event));
@@ -397,7 +400,6 @@ void * io_thread(void * arg){
                 //drain wake up 
                 while(1){
                     uint64_t x;
-                    Msg * msg = NULL;
                     ssize_t nbytes = read(wfd, &x, sizeof(x));
 
                     if(nbytes == -1){
@@ -405,39 +407,79 @@ void * io_thread(void * arg){
                         perror("read"); // else it is an actual error 
                         break;
                     }
+                }
 
-
-
-                    //broadcast the message
-                    msg = dequeue_from_msg_queue();
-                    if(msg){
-                        for(int i = 0; i < NUM_NODES - 1; i++){
-                            int fd = fds[i];
-                            size_t total_sent = 0;
-
-                            while (total_sent < msg->len) {
-                                ssize_t n = write(fd, msg->data + total_sent, msg->len - total_sent);
-                                if (n > 0) {
-                                    total_sent += n;
-                                } else if (n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
-                                    // try again
-                                    // TODO: store rest in an out buffer and try again later?
-                                    continue;
-                                } else {
-                                    perror("write");
-                                    break;
-                                }
-                            }
-                        }
+                
+                // update connections msg pointers if not already set                
+                Msg * msg = dequeue_from_msg_queue();
+                for(int i = 0; i < NUM_NODES - 1; i ++){
+                    if(conns[fds[i]].current_msg == NULL){
+                        conns[fds[i]].current_msg = msg;
+                        conns[fds[i]].written_len = 0;
                     }
-
-                    free(msg);
-
                 }
 
 
 
-                continue; //to the next event
+                //enable EPOLLOUT : notifies me when fd becomes writable
+                struct epoll_event ev;
+                for (int i = 0; i < NUM_NODES - 1; i++) {
+                    ev.events = EPOLLIN | EPOLLOUT | EPOLLET;
+                    ev.data.fd = fds[i];
+                    if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fds[i], &ev) == -1){
+                        perror("epoll_ctl");
+                        exit(1);
+                    }
+                }
+            }
+
+
+            //write if EPOLLOUT is enabled 
+            if(events[i].events & EPOLLOUT){
+                while(1){
+
+                    ssize_t n = write(fd, conn->current_msg->data + conn->written_len, conn->current_msg->len - conn->written_len);
+
+                    if(n > 0){
+                        conn->written_len += n;
+                    }else if(n == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)){
+                        break;
+                    }else{
+                        perror("write");
+                        exit(1);
+                    }
+
+
+                    pthread_mutex_lock(&msg_queue.lock);
+                    if(conn->written_len == conn->current_msg->len){
+                        conn->written_len = 0;
+                        Msg * next_msg = conn->current_msg->next;
+                        
+                        conn->current_msg->rem_writes --;
+                        if(conn->current_msg->rem_writes == 0){
+                            free(conn->current_msg);
+                        }
+                        conn->current_msg = next_msg;
+                        
+                    }
+                    pthread_mutex_unlock(&msg_queue.lock);
+
+
+
+                    if(conn->current_msg == NULL){ // all message queue done for this fd
+                        struct epoll_event ev;
+                        ev.events = EPOLLIN | EPOLLET;
+                        ev.data.fd = fd;
+                        if(epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == -1){
+                            perror("epoll_ctl");
+                            exit(1);
+                        }
+                        break;
+                    }
+
+                }
+                
+
             }
 
 
@@ -446,7 +488,7 @@ void * io_thread(void * arg){
             //keep reading till we encounter EWOULDBLOCK
             while(1){
                 // read till the connection buffer is full 
-                ssize_t nbytes = read(fd, conn->buff + conn->buff_len , sizeof(conn->buff) - conn->buff_len);
+                ssize_t nbytes = read(fd, conn->inbuff + conn->inbuff_len , sizeof(conn->inbuff) - conn->inbuff_len);
 
                 if(nbytes == -1){
                     if(errno == EAGAIN || errno == EWOULDBLOCK)break; //no more data to read
@@ -462,35 +504,35 @@ void * io_thread(void * arg){
 
 
                 // we actually read some data, we need to parse it
-                conn->buff_len += nbytes;
+                conn->inbuff_len += nbytes;
 
                 //parsing loop
-                size_t read_mark = 0; // next position to parse
+                size_t parsed_mark = 0; // next position to parse
                 while(1){
                     if(conn->state == READ_TYPE){
-                        if(conn->buff_len - read_mark < sizeof(conn->type))break; // not enough bytes to read type, break and come back after reading more 
+                        if(conn->inbuff_len - parsed_mark < sizeof(conn->type))break; // not enough bytes to read type, break and come back after reading more 
                         
-                        conn->type = conn->buff[read_mark];
-                        read_mark ++;
+                        conn->type = conn->inbuff[parsed_mark];
+                        parsed_mark ++;
                         conn->state = READ_LEN;
 
                     }
 
                     if(conn->state == READ_LEN){
-                        if(conn->buff_len - read_mark < sizeof(conn->len))break;
-                        memcpy(&conn->len, conn->buff + read_mark, 4);
-                        read_mark += 4;
+                        if(conn->inbuff_len - parsed_mark < sizeof(conn->len))break;
+                        memcpy(&conn->len, conn->inbuff + parsed_mark, 4);
+                        parsed_mark += 4;
                         conn->state = READ_PAYLOAD;
                     }
 
 
                     if(conn->state == READ_PAYLOAD){
-                        if(conn->buff_len - read_mark < conn->len)break;
+                        if(conn->inbuff_len - parsed_mark < conn->len)break;
 
                         //else full payload is here, handle it
-                        handle_payload(conn->type, conn->len, conn->buff + read_mark);
+                        handle_payload(conn->type, conn->len, conn->inbuff + parsed_mark);
 
-                        read_mark += conn->len;
+                        parsed_mark += conn->len;
                         conn->state = READ_TYPE;
 
 
@@ -500,8 +542,8 @@ void * io_thread(void * arg){
                 }
                 
                 // move the leftovers to the beginning of the buffer
-                memmove(conn->buff, conn->buff + read_mark, conn->buff_len - read_mark);
-                conn->buff_len -= read_mark;
+                memmove(conn->inbuff, conn->inbuff + parsed_mark, conn->inbuff_len - parsed_mark);
+                conn->inbuff_len -= parsed_mark;
 
                 
             }

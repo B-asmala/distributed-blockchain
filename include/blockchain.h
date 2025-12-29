@@ -4,7 +4,7 @@
 #include "block.h"
 #include "hash_map.h"
 
-#define CHAIN_MAX 1000;
+#define CHAIN_MAX 1000
 
 
 

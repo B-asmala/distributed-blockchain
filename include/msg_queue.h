@@ -11,6 +11,7 @@ typedef struct Msg {
     size_t len;
     uint8_t data[2048];
     struct Msg *next;
+    uint8_t rem_writes;
 } Msg;
 
 typedef struct {
