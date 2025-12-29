@@ -412,6 +412,7 @@ void * io_thread(void * arg){
                 
                 // update connections msg pointers if not already set                
                 Msg * msg = dequeue_from_msg_queue();
+                if(msg == NULL)continue;
                 for(int i = 0; i < NUM_NODES - 1; i ++){
                     if(conns[fds[i]].current_msg == NULL){
                         conns[fds[i]].current_msg = msg;
@@ -431,6 +432,8 @@ void * io_thread(void * arg){
                         exit(1);
                     }
                 }
+
+                continue;
             }
 
 
@@ -454,7 +457,19 @@ void * io_thread(void * arg){
                     if(conn->written_len == conn->current_msg->len){
                         conn->written_len = 0;
                         Msg * next_msg = conn->current_msg->next;
-                        
+
+
+                        // if this is the first fd, advance head, to return a totally unwritten message from dequeue_from_msg_queue next time
+                        if(conn->current_msg->rem_writes == NUM_NODES - 1){
+                            if(msg_queue.head->next == NULL){
+                                msg_queue.tail = NULL;
+                            }
+
+                            msg_queue.head = msg_queue.head->next;
+
+                        }
+
+
                         conn->current_msg->rem_writes --;
                         if(conn->current_msg->rem_writes == 0){
                             free(conn->current_msg);
